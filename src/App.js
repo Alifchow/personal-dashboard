@@ -1,4 +1,3 @@
-// src/App.jsx
 import React, { useEffect, useState, Fragment } from "react";
 import axios from "axios";
 import {
@@ -7,6 +6,7 @@ import {
   useGoogleLogin,
 } from "@react-oauth/google";
 import ical from "ical.js";
+import moment from 'moment-timezone';
 import {
   WiDayCloudy,
   WiRain,
@@ -17,7 +17,8 @@ import {
 const GOOGLE_CLIENT_ID =
   "1039570474106-dmkij0nlkp9m7f5n20jf34q62l34nr14.apps.googleusercontent.com";
 const ZURICH_TZ = "Europe/Zurich";
-const HOURS = Array.from({ length: 16 }, (_, i) => i + 7);
+// Show hours from 07:00 to 18:00 (7 to 18 inclusive)
+const HOURS = Array.from({ length: 12 }, (_, i) => i + 7); // Hours 7, 8, ..., 18
 const WEEK_DAYS = [
   "Sunday",
   "Monday",
@@ -60,6 +61,7 @@ function App() {
   const [googleEvents, setGoogleEvents] = useState([]);
   const [outlookEvents, setOutlookEvents] = useState([]);
   const [weekStart, setWeekStart] = useState(getStartOfWeek(new Date()));
+  const [outlookError, setOutlookError] = useState(null);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -165,20 +167,17 @@ function App() {
           }
         );
         evts = evts.concat(
-          data.items.map((e) => ({
-            summary: e.summary,
-            start: new Date(
-              new Date(e.start.dateTime || e.start.date).toLocaleString("en-US", {
-                timeZone: ZURICH_TZ,
-              })
-            ),
-            end: new Date(
-              new Date(e.end?.dateTime || e.end?.date || e.start.dateTime).toLocaleString("en-US", {
-                timeZone: ZURICH_TZ,
-              })
-            ),
-            source: "Google",
-          }))
+          data.items.map((e) => {
+            const start = moment.tz(e.start.dateTime || e.start.date, e.start.timeZone || ZURICH_TZ);
+            const end = moment.tz(e.end?.dateTime || e.end?.date || e.start.dateTime, e.end?.timeZone || ZURICH_TZ);
+            console.log(`Google Event: ${e.summary}, Start: ${start.format()}, End: ${end.format()}`);
+            return {
+              summary: e.summary,
+              start: start.toDate(),
+              end: end.toDate(),
+              source: "Google",
+            };
+          })
         );
       }
       evts.sort((a, b) => a.start - b.start);
@@ -188,40 +187,143 @@ function App() {
     }
   }
 
+  async function parseICSEvents(data) {
+    try {
+      const comp = new ical.Component(ical.parse(data));
+      const events = comp.getAllSubcomponents("vevent").map((v, index) => {
+        const ev = new ical.Event(v);
+        const startDate = ev.startDate;
+        const endDate = ev.endDate;
+
+        // Get raw DTSTART and DTEND properties
+        const dtstartProp = v.getFirstProperty('dtstart');
+        const dtendProp = v.getFirstProperty('dtend');
+        let tzid = dtstartProp?.getParameter('tzid') || (startDate.isUTC ? 'UTC' : null);
+
+        // Map non-IANA TZID to IANA equivalent
+        const tzidMap = {
+          'Bangladesh Standard Time': 'Asia/Dhaka',
+        };
+        const mappedTzid = tzidMap[tzid] || tzid;
+
+        // Extract raw date strings (e.g., "20250428T173000")
+        const startRaw = startDate.toString(); // YYYYMMDDTHHMMSS
+        const endRaw = endDate.toString();
+
+        // Parse raw date strings into moment objects
+        const startMomentRaw = moment(startRaw, 'YYYYMMDDTHHmmss');
+        const endMomentRaw = moment(endRaw, 'YYYYMMDDTHHmmss');
+
+        // Log raw ICS data
+        console.log(`Outlook Event ${index}: ${ev.summary}, Raw DTSTART: ${dtstartProp?.toICALString()}, Raw DTEND: ${dtendProp?.toICALString()}, TZID: ${tzid || 'None'}, Mapped TZID: ${mappedTzid || 'None'}`);
+
+        let startMoment, endMoment;
+        if (mappedTzid && moment.tz.zone(mappedTzid)) {
+          // Valid IANA TZID (e.g., Asia/Dhaka), parse in source time zone and convert to Zurich
+          startMoment = moment.tz(startRaw, 'YYYYMMDDTHHmmss', mappedTzid).tz(ZURICH_TZ);
+          endMoment = moment.tz(endRaw, 'YYYYMMDDTHHmmss', mappedTzid).tz(ZURICH_TZ);
+          console.log(`Parsed with TZID ${mappedTzid}: Start: ${startMomentRaw.format()} in ${mappedTzid}, Converted to ${ZURICH_TZ}: ${startMoment.format()}`);
+          console.log(`Parsed with TZID ${mappedTzid}: End: ${endMomentRaw.format()} in ${mappedTzid}, Converted to ${ZURICH_TZ}: ${endMoment.format()}`);
+        } else if (startDate.isUTC) {
+          // UTC time (Z suffix), treat as UTC
+          startMoment = moment.utc(startRaw, 'YYYYMMDDTHHmmss').tz(ZURICH_TZ);
+          endMoment = moment.utc(endRaw, 'YYYYMMDDTHHmmss').tz(ZURICH_TZ);
+          console.log(`Parsed as UTC: Start: ${startMomentRaw.format()} in UTC, Converted to ${ZURICH_TZ}: ${startMoment.format()}`);
+          console.log(`Parsed as UTC: End: ${endMomentRaw.format()} in UTC, Converted to ${ZURICH_TZ}: ${endMoment.format()}`);
+        } else {
+          // No TZID or invalid, assume Asia/Dhaka (since events are from Bangladesh)
+          startMoment = moment.tz(startRaw, 'YYYYMMDDTHHmmss', 'Asia/Dhaka').tz(ZURICH_TZ);
+          endMoment = moment.tz(endRaw, 'YYYYMMDDTHHmmss', 'Asia/Dhaka').tz(ZURICH_TZ);
+          console.log(`Parsed with fallback Asia/Dhaka: Start: ${startMomentRaw.format()} in Asia/Dhaka, Converted to ${ZURICH_TZ}: ${startMoment.format()}`);
+          console.log(`Parsed with fallback Asia/Dhaka: End: ${endMomentRaw.format()} in Asia/Dhaka, Converted to ${ZURICH_TZ}: ${endMoment.format()}`);
+        }
+
+        return {
+          summary: ev.summary || 'No Title',
+          start: startMoment.toDate(),
+          end: endMoment.toDate(),
+          source: "Outlook",
+        };
+      });
+      console.log('Parsed Outlook events:', events.length);
+      return events;
+    } catch (e) {
+      console.error('ICS parsing error:', e);
+      throw new Error('Failed to parse ICS file.');
+    }
+  }
+
   useEffect(() => {
-    async function fetchOutlook() {
-      try {
-        const { data } = await axios.get(
-          "https://cors-anywhere.herokuapp.com/https://outlook.office365.com/owa/calendar/f134bf87313446008f80c2ed0f8ccdf4@selisegroup.com/b941e567ed50404a80632b6e6a5711ce16597366540435049623/calendar.ics"
-        );
-        const comp = new ical.Component(ical.parse(data));
-        const events = comp.getAllSubcomponents("vevent").map((v) => {
-          const ev = new ical.Event(v);
-          // Convert any BST/Zulu timestamps to CET (Zurich)
-          const startUtc = ev.startDate.toJSDate();
-          const endUtc = ev.endDate.toJSDate();
-          const startCet = new Date(
-            startUtc.toLocaleString('en-US', { timeZone: ZURICH_TZ })
-          );
-          const endCet = new Date(
-            endUtc.toLocaleString('en-US', { timeZone: ZURICH_TZ })
-          );
-          return {
-            summary: ev.summary,
-            start: startCet,
-            end: endCet,
-            source: "Outlook",
-          };
-        });
-        setOutlookEvents(events);
-      } catch (e) {
-        console.error("Outlook ICS fetch error", e);
+    async function fetchOutlookWithRetry(attempts = 3) {
+      const urls = [
+        "https://cors-anywhere.herokuapp.com/https://outlook.office365.com/owa/calendar/f134bf87313446008f80c2ed0f8ccdf4@selisegroup.com/b941e567ed50404a80632b6e6a5711ce16597366540435049623/calendar.ics",
+        "https://api.allorigins.win/raw?url=https://outlook.office365.com/owa/calendar/f134bf87313446008f80c2ed0f8ccdf4@selisegroup.com/b941e567ed50404a80632b6e6a5711ce16597366540435049623/calendar.ics",
+      ];
+
+      for (let url of urls) {
+        for (let i = 1; i <= attempts; i++) {
+          const delay = Math.pow(2, i) * 1000;
+          try {
+            console.log(`Fetching Outlook ICS from ${url} (Attempt ${i}/${attempts})...`);
+            const response = await axios.get(url, {
+              timeout: 15000,
+              headers: url.includes('cors-anywhere') ? { 'X-Requested-With': 'XMLHttpRequest' } : {},
+            });
+            const data = response.data;
+            console.log('ICS data received:', data.substring(0, 200));
+
+            if (!data.trim().startsWith('BEGIN:VCALENDAR')) {
+              throw new Error('Response is not a valid ICS file. Received HTML or other content.');
+            }
+
+            const events = await parseICSEvents(data);
+            setOutlookEvents(events);
+            setOutlookError(null);
+            return;
+          } catch (e) {
+            console.error(`Outlook ICS fetch error from ${url} (Attempt ${i}/${attempts}):`, {
+              message: e.message,
+              status: e.response?.status,
+              data: e.response?.data?.substring?.(0, 200) || e.response?.data,
+              code: e.code,
+              headers: e.response?.headers,
+              stack: e.stack,
+            });
+            if (i < attempts) {
+              console.log(`Retrying ${url} in ${delay}ms...`);
+              await new Promise(resolve => setTimeout(resolve, delay));
+            } else if (url === urls[urls.length - 1]) {
+              const errorMessage = e.message.includes('not a valid ICS file')
+                ? 'Invalid calendar data received from Outlook. Please check the ICS URL.'
+                : e.response?.status === 429
+                ? 'Too many requests to Outlook server. Please try again later.'
+                : e.response?.status === 408
+                ? 'Request to Outlook server timed out. Please try again later.'
+                : 'Failed to load Outlook events. Check the ICS URL or try again later.';
+              setOutlookError(errorMessage);
+            }
+          }
+        }
       }
     }
-    fetchOutlook();
-    const id = setInterval(fetchOutlook, 300000);
+    fetchOutlookWithRetry();
+    const id = setInterval(() => fetchOutlookWithRetry(), 300000);
     return () => clearInterval(id);
   }, []);
+
+  const handleFileUpload = async (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      try {
+        const text = await file.text();
+        const events = await parseICSEvents(text);
+        setOutlookEvents(events);
+        setOutlookError(null);
+      } catch (e) {
+        setOutlookError('Failed to parse uploaded ICS file.');
+      }
+    }
+  };
 
   const allEvents = [...googleEvents, ...outlookEvents];
   const isAuthed = Boolean(accessToken);
@@ -261,72 +363,88 @@ function App() {
         </div>
       )}
 
-      <section className="p-4 md:p-6 bg-gray-800 rounded-xl shadow-lg mb-8 flex flex-col md:flex-row items-center justify-between space-y-4 md:space-y-0 md:space-x-6">
-  {/* Combined Time + Weather + Forecast */}
-  <div className="flex-1 flex flex-col sm:flex-row items-center justify-center sm:justify-start gap-4">
-    <div className="text-center sm:text-left">
-      <div className="text-xs text-gray-400">Local Time</div>
-      <div className="text-2xl font-bold">{localTime.toLocaleTimeString()}</div>
-    </div>
-    <div className="text-center sm:text-left">
-      <div className="text-xs text-gray-400">Dhaka Time</div>
-      <div className="text-2xl font-bold">{dhakaTime.toLocaleTimeString()}</div>
-    </div>
-  </div>
+      <div className="flex justify-center mb-6">
+        <label className="bg-blue-600 hover:bg-blue-700 px-6 py-2 rounded-lg shadow cursor-pointer">
+          Upload ICS File
+          <input
+            type="file"
+            accept=".ics"
+            className="hidden"
+            onChange={handleFileUpload}
+          />
+        </label>
+      </div>
 
-  <div className="flex-1 flex items-center justify-center">
-    {weather ? (
-      <div className="flex items-center gap-3">
-        <WiDayCloudy size={48} className="animate-pulse text-blue-300" />
-        <div>
-          <div className="text-xs text-gray-400">Zurich Weather</div>
-          <div className="text-xl font-semibold">
-            {weather.main.temp}°C
+      <section className="p-4 md:p-6 bg-gray-800 rounded-xl shadow-lg mb-8 flex flex-col md:flex-row items-center justify-between space-y-4 md:space-y-0 md:space-x-6">
+        <div className="flex-1 flex flex-col sm:flex-row items-center justify-center sm:justify-start gap-4">
+          <div className="text-center sm:text-left">
+            <div className="text-xs text-gray-400">Local Time (Zurich)</div>
+            <div className="text-2xl font-bold">{localTime.toLocaleTimeString('en-GB', { timeZone: ZURICH_TZ })}</div>
           </div>
-          <div className="capitalize text-sm text-gray-200">
-            {weather.weather[0].description}
+          <div className="text-center sm:text-left">
+            <div className="text-xs text-gray-400">Dhaka Time</div>
+            <div className="text-2xl font-bold">{localTime.toLocaleTimeString('en-GB', { timeZone: 'Asia/Dhaka' })}</div>
           </div>
         </div>
-      </div>
-    ) : (
-      <div className="text-gray-400">Loading weather…</div>
-    )}
-  </div>
 
-  {forecastMessage && (
-    <div className="flex-1">
-      <div className="bg-blue-700 px-3 py-2 rounded-lg flex items-center justify-center gap-2 animate-fade-in">
-        {forecastType === 'rain' && <WiRain size={24} className="text-white animate-bounce" />}
-        {forecastType === 'snow' && <WiSnow size={24} className="text-white animate-bounce" />}
-        {forecastType === 'storm' && <WiStormShowers size={24} className="text-white animate-bounce" />}
-        <span className="text-sm font-medium truncate text-white">
-          {forecastMessage}
-        </span>
-      </div>
-    </div>
-  )}
-</section>
+        <div className="flex-1 flex items-center justify-center">
+          {weather ? (
+            <div className="flex items-center gap-3">
+              <WiDayCloudy size={48} className="animate-pulse text-blue-300" />
+              <div>
+                <div className="text-xs text-gray-400">Zurich Weather</div>
+                <div className="text-xl font-semibold">
+                  {weather.main.temp}°C
+                </div>
+                <div className="capitalize text-sm text-gray-200">
+                  {weather.weather[0].description}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="text-gray-400">Loading weather…</div>
+          )}
+        </div>
+
+        {forecastMessage && (
+          <div className="flex-1">
+            <div className="bg-blue-700 px-3 py-2 rounded-lg flex items-center justify-center gap-2 animate-fade-in">
+              {forecastType === 'rain' && <WiRain size={24} className="text-white animate-bounce" />}
+              {forecastType === 'snow' && <WiSnow size={24} className="text-white animate-bounce" />}
+              {forecastType === 'storm' && <WiStormShowers size={24} className="text-white animate-bounce" />}
+              <span className="text-sm font-medium truncate text-white">
+                {forecastMessage}
+              </span>
+            </div>
+          </div>
+        )}
+      </section>
 
       <section className="mb-6">
-        <div className="flex justify-between items-center mb-2">
-          <h2 className="text-xl font-semibold">Week Calendar (07–22)</h2>
+        <div className="flex justify-between items-center mb-4">
+          <h2 className="text-2xl font-semibold">Week Calendar (07–18, Zurich Time)</h2>
           <div className="space-x-2">
-            <button onClick={() => setWeekStart(addDays(weekStart, -7))} className="bg-blue-600 hover:bg-blue-700 px-3 py-1 rounded">
+            <button onClick={() => setWeekStart(addDays(weekStart, -7))} className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg text-sm">
               ◀︎ Prev
             </button>
-            <button onClick={() => setWeekStart(addDays(weekStart, 7))} className="bg-blue-600 hover:bg-blue-700 px-3 py-1 rounded">
+            <button onClick={() => setWeekStart(addDays(weekStart, 7))} className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg text-sm">
               Next ▶︎
             </button>
           </div>
         </div>
-        <div className="overflow-x-auto overflow-y-scroll max-h-[600px]">
-          <div className="grid grid-cols-[60px_repeat(7,minmax(0,1fr))] border border-gray-700">
+        {outlookError && (
+          <div className="bg-red-800 text-white p-4 rounded-lg mb-4 text-center">
+            {outlookError}
+          </div>
+        )}
+        <div className="w-full overflow-x-auto">
+          <div className="grid grid-cols-[60px_repeat(7,minmax(0,1fr))] border border-gray-700 min-w-[800px]">
             <div className="bg-gray-900"></div>
             {WEEK_DAYS.map((dayName, idx) => {
               const day = addDays(weekStart, idx);
               const isToday = day.toDateString() === new Date().toDateString();
               return (
-                <div key={dayName} className={`text-center py-2 font-semibold border-l border-gray-700 ${isToday ? 'bg-blue-800 text-white' : 'bg-gray-800 text-gray-200'}`}>
+                <div key={dayName} className={`text-center py-3 font-semibold border-l border-gray-700 text-sm ${isToday ? 'bg-blue-800 text-white' : 'bg-gray-800 text-gray-200'}`}>
                   {dayName}<br />{day.toLocaleDateString('en-GB')}
                 </div>
               );
@@ -335,23 +453,31 @@ function App() {
               const nowHour = new Date().getHours() === hour;
               return (
                 <Fragment key={hour}>
-                  <div className={`text-xs text-right px-2 py-1 border-t border-gray-700 ${nowHour ? 'bg-blue-950 text-blue-400' : 'bg-gray-900 text-gray-400'}`}>{hour}:00</div>
+                  <div className={`text-sm text-right px-3 py-3 border-t border-gray-700 ${nowHour ? 'bg-blue-950 text-blue-400' : 'bg-gray-900 text-gray-400'}`}>{hour}:00</div>
                   {WEEK_DAYS.map((_, dayIdx) => {
                     const day = addDays(weekStart, dayIdx);
                     const cellEvents = allEvents.filter(
-                      (ev) => ev.start.getHours() === hour && ev.start.toDateString() === day.toDateString()
+                      (ev) => {
+                        const eventStart = moment.tz(ev.start, ZURICH_TZ);
+                        return eventStart.hour() === hour && eventStart.toDate().toDateString() === day.toDateString();
+                      }
                     );
                     const highlight = nowHour && day.toDateString() === new Date().toDateString();
                     return (
-                      <div key={dayIdx} className={`border-t border-l border-gray-700 px-2 py-1 min-h-[40px] text-sm ${highlight ? 'bg-blue-700/50' : 'bg-gray-800'}`}>
-                        {cellEvents.map((ev, i) => (
-                          <div key={i} className={`truncate ${ev.source === 'Google' ? 'text-blue-400' : 'text-green-400'}`}>
-                            {'\u2022'} {ev.summary}<br />
-                            <span className="text-xs text-gray-300">
-                              {ev.start.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}- {ev.end.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
-                            </span>
-                          </div>
-                        ))}
+                      <div key={dayIdx} className={`border-t border-l border-gray-700 px-2 py-2 min-h-[60px] text-sm ${highlight ? 'bg-blue-700/50' : 'bg-gray-800'}`}>
+                        {cellEvents.map((ev, i) => {
+                          const eventStart = moment.tz(ev.start, ZURICH_TZ);
+                          const eventEnd = moment.tz(ev.end, ZURICH_TZ);
+                          console.log(`Rendering Event ${ev.summary}: ${eventStart.format()} to ${eventEnd.format()} (Zurich)`);
+                          return (
+                            <div key={i} className={`truncate ${ev.source === 'Google' ? 'text-blue-400' : 'text-green-400'}`}>
+                              {'\u2022'} {ev.summary}<br />
+                              <span className="text-xs text-gray-300">
+                                {eventStart.format('HH:mm')}-{eventEnd.format('HH:mm')}
+                              </span>
+                            </div>
+                          );
+                        })}
                       </div>
                     );
                   })}
