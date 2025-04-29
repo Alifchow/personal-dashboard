@@ -2,7 +2,74 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Optional custom styling */
+/* Base Tailwind Setup for Body */
 body {
-  font-family: 'Inter', sans-serif;
+  @apply bg-gray-900 text-white min-h-screen font-sans;
+  height: 100%;
+  margin: 0;
+  font-family: 'Inter', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  background-color: #0f172a; /* fallback background for old browsers */
+}
+
+/* Base raw CSS for HTML */
+html {
+  scroll-behavior: smooth;
+  height: 100%;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Make all buttons feel clickable */
+button {
+  cursor: pointer;
+}
+
+/* Image handling if needed */
+img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
+/* Smooth scrollbar for Webkit browsers (Mac Chrome/Safari) */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Prevent unwanted outlines (optional, still keep accessibility in mind) */
+button:focus,
+input:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.5); /* Tailwind blue-500 */
+}
+
+/* Utility classes */
+.container {
+  width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+  padding-left: 1rem;
+  padding-right: 1rem;
+}
+
+/* Optional luxury hover effect for cards */
+.card-hover {
+  transition: all 0.3s ease;
+}
+
+.card-hover:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 10px 15px rgba(0, 0, 0, 0.25);
 }
