@@ -20,6 +20,7 @@ export default function Calendar({
   weekStart,
   setWeekStart,
 }) {
+  console.log("📆 Calendar rendering with Google events:", googleEvents);
   const addDays = (date, days) => {
     return new Date(date.getTime() + days * 86400000);
   };
@@ -88,11 +89,29 @@ export default function Calendar({
                 {WEEK_DAYS.map((_, dayIdx) => {
                   const day = addDays(weekStart, dayIdx);
                   const cellEvents = allEvents.filter((ev) => {
-                    const eventStart = moment.tz(ev.start, ZURICH_TZ);
-                    return (
-                      eventStart.hour() === hour &&
-                      eventStart.toDate().toDateString() === day.toDateString()
-                    );
+                    const eventStart = moment.tz(ev.start.dateTime || ev.start.date, ZURICH_TZ);
+                    const isSameDay = eventStart.toDate().toDateString() === day.toDateString();
+                    const isSameHour = ev.start.dateTime && eventStart.hour() === hour;
+                    const isAllDay = !ev.start.dateTime;
+                    const match = isSameDay && (isSameHour || (isAllDay && hour === 7));
+                    if (!match && isSameDay) {
+                      console.log("🔸 Skipped event for hour slot:", {
+                        event: ev.summary,
+                        eventStart: eventStart.format(),
+                        hour,
+                        isSameHour,
+                        isAllDay,
+                      });
+                    }
+                    if (match) {
+                      console.log("🟢 Matched event for cell:", {
+                        day: day.toDateString(),
+                        hour,
+                        event: ev.summary,
+                        eventStart: eventStart.format(),
+                      });
+                    }
+                    return match;
                   });
 
                   const highlight =
@@ -106,8 +125,8 @@ export default function Calendar({
                       }`}
                     >
                       {cellEvents.map((ev, i) => {
-                        const eventStart = moment.tz(ev.start, ZURICH_TZ);
-                        const eventEnd = moment.tz(ev.end, ZURICH_TZ);
+                        const eventStart = moment.tz(ev.start.dateTime || ev.start.date, ZURICH_TZ);
+                        const eventEnd = moment.tz(ev.end?.dateTime || ev.end?.date, ZURICH_TZ);
 
                         console.log(
                           `Rendering Event ${ev.summary}: ${eventStart.format()} to ${eventEnd.format()} (Zurich)`
@@ -127,7 +146,9 @@ export default function Calendar({
                             {"\u2022"} {ev.summary}
                             <br />
                             <span className="text-xs text-gray-300">
-                              {eventStart.format("HH:mm")}-{eventEnd.format("HH:mm")}
+                              {!ev.start.dateTime
+                                ? "All Day"
+                                : `${eventStart.format("HH:mm")}-${eventEnd.format("HH:mm")}`}
                             </span>
                           </div>
                         );

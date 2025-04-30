@@ -1,61 +1,55 @@
-import React from "react";
-import { googleLogout, useGoogleLogin } from "@react-oauth/google";
+import { useGoogleLogin } from "@react-oauth/google";
 import axios from "axios";
 
-export default function Auth({
-  accessToken,
-  setAccessToken,
-  user,
-  setUser,
-  setGoogleEvents,
-}) {
+export default function Auth({ setAccessToken, setUser }) {
   const login = useGoogleLogin({
-    scope: "https://www.googleapis.com/auth/calendar.readonly profile email",
-    onSuccess: async (tok) => {
-      setAccessToken(tok.access_token);
+    flow: "auth-code",
+    onSuccess: async (codeResponse) => {
       try {
-        const { data } = await axios.get(
-          "https://www.googleapis.com/oauth2/v3/userinfo",
-          { headers: { Authorization: `Bearer ${tok.access_token}` } }
+        const res = await axios.post(
+          "https://oauth2.googleapis.com/token",
+          new URLSearchParams({
+            code: codeResponse.code,
+            client_id: "1039570474106-dmkij0nlkp9m7f5n20jf34q62l34nr14.apps.googleusercontent.com",
+            client_secret: "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",
+            redirect_uri: "http://127.0.0.1:8888",
+            grant_type: "authorization_code",
+          }),
+          {
+            headers: {
+              "Content-Type": "application/x-www-form-urlencoded",
+            },
+          }
         );
-        setUser(data);
-      } catch (e) {
-        console.error("User info fetch error", e);
+
+        const { access_token } = res.data;
+        setAccessToken(access_token);
+        localStorage.setItem("accessToken", access_token);
+
+        // Fetch user info
+        const userInfo = await axios.get("https://www.googleapis.com/oauth2/v3/userinfo", {
+          headers: {
+            Authorization: `Bearer ${access_token}`,
+          },
+        });
+
+        setUser(userInfo.data);
+        localStorage.setItem("user", JSON.stringify(userInfo.data));
+      } catch (error) {
+        console.error("Token exchange or user fetch failed:", error.response?.data || error.message);
       }
     },
-    onError: (err) => console.error("Login error", err),
+    onError: (err) => console.error("Google Login Failed", err),
   });
 
-  const handleLogout = () => {
-    googleLogout();
-    setAccessToken(null);
-    setUser(null);
-    setGoogleEvents([]);
-  };
-
   return (
-    <div className="flex justify-center mb-6">
-      {!accessToken ? (
-        <button
-          onClick={login}
-          className="bg-blue-600 hover:bg-blue-700 px-6 py-2 rounded-lg shadow"
-        >
-          Sign in with Google
-        </button>
-      ) : (
-        <div className="flex justify-center items-center gap-4 text-sm">
-          <span className="text-gray-300">
-            Signed in as{" "}
-            <strong className="text-white">{user?.email || user?.name}</strong>
-          </span>
-          <button
-            onClick={handleLogout}
-            className="text-red-400 hover:text-red-300 underline"
-          >
-            Logout
-          </button>
-        </div>
-      )}
+    <div>
+      <button
+        onClick={() => login()}
+        className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded shadow"
+      >
+        Sign in with Google
+      </button>
     </div>
   );
 }
