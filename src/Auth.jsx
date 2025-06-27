@@ -4,6 +4,7 @@ import axios from "axios";
 export default function Auth({ setAccessToken, setUser }) {
   const login = useGoogleLogin({
     flow: "auth-code",
+    scope: "https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email",
     onSuccess: async (codeResponse) => {
       try {
         const res = await axios.post(
@@ -12,7 +13,7 @@ export default function Auth({ setAccessToken, setUser }) {
             code: codeResponse.code,
             client_id: "1039570474106-dmkij0nlkp9m7f5n20jf34q62l34nr14.apps.googleusercontent.com",
             client_secret: process.env.REACT_APP_GOOGLE_CLIENT_SECRET || "",
-            redirect_uri: "http://localhost:8888",
+            redirect_uri: "http://127.0.0.1:8888",
             grant_type: "authorization_code",
           }),
           {

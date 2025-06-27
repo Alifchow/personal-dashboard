@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import axios from "axios";
 import { GoogleOAuthProvider } from "@react-oauth/google";
 import Auth from "./Auth";
+import LoginPage from "./LoginPage";
 import TimeDisplay from "./TimeDisplay";
 import WeatherDisplay from "./WeatherDisplay";
 import Calendar from "./Calendar";
@@ -19,6 +20,15 @@ export default function AppWrapper() {
 }
 
 export function App() {
+  const [isAuthenticated, setIsAuthenticated] = useState(() => {
+    // Check if user is already authenticated
+    const savedUser = localStorage.getItem("user");
+    const savedToken = localStorage.getItem("accessToken");
+    const authenticated = !!(savedUser && savedToken);
+    console.log("🔐 Authentication check:", { savedUser: !!savedUser, savedToken: !!savedToken, authenticated });
+    return authenticated;
+  });
+
   const [user, setUser] = useState(() => {
     const savedUser = localStorage.getItem("user");
     return savedUser ? JSON.parse(savedUser) : null;
@@ -46,23 +56,64 @@ export function App() {
     return weekStart;
   });
 
+  // Handle successful login
+  const handleLoginSuccess = (userData, token) => {
+    setUser(userData);
+    setAccessToken(token);
+    setIsAuthenticated(true);
+    
+    // Store in localStorage
+    localStorage.setItem("user", JSON.stringify(userData));
+    localStorage.setItem("accessToken", token);
+    
+    // Clear temporary storage
+    localStorage.removeItem("tempUser");
+    localStorage.removeItem("tempAccessToken");
+  };
+
+  // Handle logout
+  const handleLogout = () => {
+    setUser(null);
+    setAccessToken(null);
+    setSpotifyAccessToken(null);
+    setSpotifyRefreshToken(null);
+    setSpotifyExpiresIn(null);
+    setIsAuthenticated(false);
+    
+    // Clear all localStorage
+    localStorage.removeItem("user");
+    localStorage.removeItem("accessToken");
+    localStorage.removeItem('cachedCalendarEvents');
+    localStorage.removeItem('lastCalendarFetch');
+    localStorage.removeItem("tempUser");
+    localStorage.removeItem("tempAccessToken");
+  };
+
   // Check for Spotify code in URL search params on mount
   useEffect(() => {
     const code = getCodeFromUrl();
     if (code) {
+      console.log("Spotify callback detected, processing...");
       // Exchange code for access token
       exchangeCodeForToken(code).then(tokenData => {
         if (tokenData) {
           setSpotifyAccessToken(tokenData.accessToken);
           setSpotifyRefreshToken(tokenData.refreshToken);
           setSpotifyExpiresIn(tokenData.expiresIn);
+          console.log("Spotify authentication successful");
           // Clear the search params and redirect to root path
-          if (window.location.pathname === "/callback") {
-            window.history.replaceState({}, document.title, "/");
-          } else {
-            window.history.replaceState({}, document.title, window.location.pathname);
-          }
+          const currentPath = window.location.pathname;
+          const newPath = currentPath === "/callback" ? "/" : currentPath;
+          window.history.replaceState({}, document.title, newPath);
+        } else {
+          console.error("Spotify token exchange failed");
         }
+      }).catch(error => {
+        console.error("Spotify authentication error:", error);
+        // Clear URL params on error too
+        const currentPath = window.location.pathname;
+        const newPath = currentPath === "/callback" ? "/" : currentPath;
+        window.history.replaceState({}, document.title, newPath);
       });
     }
   }, []);
@@ -89,28 +140,49 @@ export function App() {
     return () => clearTimeout(refreshInterval);
   }, [spotifyRefreshToken, spotifyExpiresIn]);
 
-  // Fetch Google Calendar events
+  // Fetch Google Calendar events with caching
   useEffect(() => {
+    console.log("Calendar useEffect triggered, accessToken:", !!accessToken);
     if (accessToken) {
-      const fetchEvents = async () => {
+      console.log("Starting calendar fetch process...");
+      const fetchAndCacheEvents = async () => {
         try {
-          // Calculate current week's start and end dates
-          const now = new Date();
-          const currentDay = now.getDay(); // 0 = Sunday, 1 = Monday, etc.
+          // Check if we have cached data and if it's less than 1 hour old
+          const cachedData = localStorage.getItem('cachedCalendarEvents');
+          const lastFetchTime = localStorage.getItem('lastCalendarFetch');
+          const now = Date.now();
+          const oneHour = 60 * 60 * 1000; // 1 hour in milliseconds
+
+          if (cachedData && lastFetchTime && (now - parseInt(lastFetchTime)) < oneHour) {
+            // Use cached data
+            const parsedEvents = JSON.parse(cachedData);
+            setGoogleEvents(parsedEvents);
+            console.log('Using cached calendar events');
+            return;
+          }
+
+          // Calculate date range: 1 week past, current week, 3 weeks future (5 weeks total)
+          const currentDate = new Date();
+          const currentDay = currentDate.getDay(); // 0 = Sunday, 1 = Monday, etc.
           const daysFromMonday = currentDay === 0 ? 6 : currentDay - 1; // Adjust for Monday start
           
-          const weekStart = new Date(now);
-          weekStart.setDate(now.getDate() - daysFromMonday);
-          weekStart.setHours(0, 0, 0, 0);
+          const currentWeekStart = new Date(currentDate);
+          currentWeekStart.setDate(currentDate.getDate() - daysFromMonday);
+          currentWeekStart.setHours(0, 0, 0, 0);
           
-          const weekEnd = new Date(weekStart);
-          weekEnd.setDate(weekStart.getDate() + 6);
-          weekEnd.setHours(23, 59, 59, 999);
+          // Start date: 1 week before current week
+          const startDate = new Date(currentWeekStart);
+          startDate.setDate(currentWeekStart.getDate() - 7);
           
-          const start = weekStart.toISOString();
-          const end = weekEnd.toISOString();
+          // End date: 3 weeks after current week
+          const endDate = new Date(currentWeekStart);
+          endDate.setDate(currentWeekStart.getDate() + 28); // 4 weeks (current + 3 future)
+          endDate.setHours(23, 59, 59, 999);
+          
+          const start = startDate.toISOString();
+          const end = endDate.toISOString();
 
-          console.log("Fetching events for week:", { start, end });
+          console.log("Fetching events for extended range:", { start, end });
 
           const calendarIds = [
             "primary",
@@ -149,7 +221,13 @@ export function App() {
           }
 
           allEvents.sort((a, b) => new Date(a.start.dateTime || a.start.date) - new Date(b.start.dateTime || b.start.date));
+          
+          // Cache the events and timestamp
+          localStorage.setItem('cachedCalendarEvents', JSON.stringify(allEvents));
+          localStorage.setItem('lastCalendarFetch', now.toString());
+          
           setGoogleEvents(allEvents);
+          console.log('Calendar events cached successfully');
         } catch (error) {
           console.error("Failed to fetch Google Calendar events:", error.response?.data || error.message);
           if (error.response?.status === 401) {
@@ -157,23 +235,130 @@ export function App() {
             setUser(null);
             localStorage.removeItem("user");
             localStorage.removeItem("accessToken");
+            // Also clear cached calendar data on auth error
+            localStorage.removeItem('cachedCalendarEvents');
+            localStorage.removeItem('lastCalendarFetch');
           }
         }
       };
 
-      fetchEvents();
+      console.log("About to call fetchAndCacheEvents...");
+      fetchAndCacheEvents();
+
+      // Set up hourly refresh timer
+      const refreshInterval = setInterval(() => {
+        console.log('Refreshing calendar cache...');
+        fetchAndCacheEvents();
+      }, 60 * 60 * 1000); // 1 hour
+
+      return () => clearInterval(refreshInterval);
     }
   }, [accessToken]);
 
   console.log("🧠 App state:", { googleEvents, outlookEvents, accessToken, user, spotifyAccessToken, spotifyRefreshToken, spotifyExpiresIn });
 
+  // Manual refresh function
+  const handleManualRefresh = async () => {
+    if (accessToken) {
+      // Clear cache to force fresh fetch
+      localStorage.removeItem('cachedCalendarEvents');
+      localStorage.removeItem('lastCalendarFetch');
+      
+      // Re-fetch events
+      const fetchAndCacheEvents = async () => {
+        try {
+          // Calculate date range: 1 week past, current week, 3 weeks future (5 weeks total)
+          const currentDate = new Date();
+          const currentDay = currentDate.getDay(); // 0 = Sunday, 1 = Monday, etc.
+          const daysFromMonday = currentDay === 0 ? 6 : currentDay - 1; // Adjust for Monday start
+          
+          const currentWeekStart = new Date(currentDate);
+          currentWeekStart.setDate(currentDate.getDate() - daysFromMonday);
+          currentWeekStart.setHours(0, 0, 0, 0);
+          
+          // Start date: 1 week before current week
+          const startDate = new Date(currentWeekStart);
+          startDate.setDate(currentWeekStart.getDate() - 7);
+          
+          // End date: 3 weeks after current week
+          const endDate = new Date(currentWeekStart);
+          endDate.setDate(currentWeekStart.getDate() + 28); // 4 weeks (current + 3 future)
+          endDate.setHours(23, 59, 59, 999);
+          
+          const start = startDate.toISOString();
+          const end = endDate.toISOString();
+
+          console.log("Manual refresh - fetching events for extended range:", { start, end });
+
+          const calendarIds = [
+            "primary",
+            "family05116003889426727376@group.calendar.google.com",
+            "qp60mj35k3g66hp4jf92opmivcacde9s@import.calendar.google.com",
+          ];
+
+          let allEvents = [];
+          for (const calendarId of calendarIds) {
+            const response = await axios.get(
+              `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
+                calendarId
+              )}/events`,
+              {
+                headers: {
+                  Authorization: `Bearer ${accessToken}`,
+                },
+                params: {
+                  timeMin: start,
+                  timeMax: end,
+                  singleEvents: true,
+                  orderBy: "startTime",
+                },
+              }
+            );
+
+            console.log(`Manual refresh - fetched events from calendar ${calendarId}:`, response.data.items);
+
+            const events = (response.data.items || []).map(event => ({
+              ...event,
+              calendarId: calendarId,
+              isAllDay: event.start.date && event.start.date !== event.end.date,
+            }));
+
+            allEvents = allEvents.concat(events);
+          }
+
+          allEvents.sort((a, b) => new Date(a.start.dateTime || a.start.date) - new Date(b.start.dateTime || b.start.date));
+          
+          // Cache the events and timestamp
+          localStorage.setItem('cachedCalendarEvents', JSON.stringify(allEvents));
+          localStorage.setItem('lastCalendarFetch', Date.now().toString());
+          
+          setGoogleEvents(allEvents);
+          console.log('Manual refresh - calendar events cached successfully');
+        } catch (error) {
+          console.error("Manual refresh failed:", error.response?.data || error.message);
+        }
+      };
+
+      await fetchAndCacheEvents();
+    }
+  };
+
+  // Show login page if not authenticated
+  if (!isAuthenticated) {
+    console.log("🔐 Showing login page");
+    return <LoginPage onLoginSuccess={handleLoginSuccess} />;
+  }
+
+  console.log("🔐 Showing dashboard - user is authenticated");
+
+  // Show dashboard if authenticated
   return (
-    <div className="w-full min-h-screen font-sans text-white bg-gradient-to-br from-gray-900 to-blue-900 p-4 sm:p-6">
-      <div className="flex flex-col md:flex-row gap-6 max-w-screen-2xl mx-auto">
+    <div className="w-full h-screen font-sans text-white bg-gradient-to-br from-gray-900 to-blue-900 p-2 sm:p-4 overflow-hidden">
+      <div className="flex flex-col md:flex-row gap-3 sm:gap-4 max-w-screen-2xl mx-auto h-full">
         {/* LEFT SIDE */}
-        <div className="flex flex-col gap-6 w-full md:w-[250px]">
+        <div className="flex flex-col gap-3 sm:gap-4 w-full md:w-[220px] lg:w-[250px]">
           {/* User Info Section */}
-          <div className="bg-gradient-to-br from-gray-800 to-gray-900 p-4 rounded-xl shadow-lg backdrop-blur-sm bg-opacity-80 border border-gray-700 text-center text-sm">
+          <div className="bg-gradient-to-br from-gray-800 to-gray-900 p-3 rounded-xl shadow-lg backdrop-blur-sm bg-opacity-80 border border-gray-700 text-center text-sm">
             <div>
               Welcome, <span className="text-blue-300 font-medium">{user?.name || "Guest"}</span>
             </div>
@@ -181,16 +366,7 @@ export function App() {
               <div className="text-xs text-gray-400 mt-1">
                 ({user.email}) ·{" "}
                 <button
-                  onClick={() => {
-                    setUser(null);
-                    setAccessToken(null);
-                    localStorage.removeItem("user");
-                    localStorage.removeItem("accessToken");
-                    // Also clear Spotify tokens on logout
-                    setSpotifyAccessToken(null);
-                    setSpotifyRefreshToken(null);
-                    setSpotifyExpiresIn(null);
-                  }}
+                  onClick={handleLogout}
                   className="text-red-300 hover:text-red-400 underline"
                 >
                   Logout
@@ -205,7 +381,7 @@ export function App() {
           </div>
 
           {/* Spotify Player Section */}
-          <div className="bg-gradient-to-br from-gray-800 to-gray-900 p-4 rounded-xl shadow-lg backdrop-blur-sm bg-opacity-80 border border-gray-700 text-center">
+          <div className="bg-gradient-to-br from-gray-800 to-gray-900 p-3 rounded-xl shadow-lg backdrop-blur-sm bg-opacity-80 border border-gray-700 text-center">
             {spotifyAccessToken ? (
               <SpotifyPlayerComponent accessToken={spotifyAccessToken} />
             ) : (
@@ -219,13 +395,13 @@ export function App() {
           </div>
 
           {/* Weather Display Section */}
-          <div className="bg-gradient-to-br from-gray-800 to-gray-900 p-4 rounded-xl shadow-lg backdrop-blur-sm bg-opacity-80 border border-gray-700 text-center">
+          <div className="bg-gradient-to-br from-gray-800 to-gray-900 p-3 rounded-xl shadow-lg backdrop-blur-sm bg-opacity-80 border border-gray-700 text-center">
             <WeatherDisplay />
           </div>
 
-          {/* Auth Section (if not logged in) */}
-          {!user?.email && (
-            <div className="bg-gradient-to-br from-gray-800 to-gray-900 p-4 rounded-xl shadow-lg backdrop-blur-sm bg-opacity-80 border border-gray-700 text-center">
+          {/* Auth Section (if not logged in to Google) */}
+          {!accessToken && (
+            <div className="bg-gradient-to-br from-gray-800 to-gray-900 p-3 rounded-xl shadow-lg backdrop-blur-sm bg-opacity-80 border border-gray-700 text-center">
               <Auth
                 setAccessToken={(token) => {
                   setAccessToken(token);
@@ -241,11 +417,34 @@ export function App() {
         </div>
 
         {/* RIGHT SIDE */}
-        <div className="flex-1 bg-gradient-to-br from-gray-800 to-gray-900 p-4 rounded-xl shadow-lg backdrop-blur-sm bg-opacity-80 border border-gray-700">
-          <div className="text-xs sm:text-sm text-gray-300 mb-3">
-            Week Calendar ({weekStart.toLocaleDateString()})
+        <div className="flex-1 bg-gradient-to-br from-gray-800 to-gray-900 p-3 sm:p-4 rounded-xl shadow-lg backdrop-blur-sm bg-opacity-80 border border-gray-700 overflow-hidden">
+          <div className="flex justify-between items-center text-xs sm:text-sm text-gray-300 mb-2 sm:mb-3">
+            <div>
+              Week Calendar ({weekStart.toLocaleDateString()})
+              {localStorage.getItem('cachedCalendarEvents') && (
+                <span className="ml-2 text-green-400 text-xs">
+                  • Cached
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              {localStorage.getItem('lastCalendarFetch') && (
+                <span className="text-xs text-gray-500">
+                  Updated: {new Date(parseInt(localStorage.getItem('lastCalendarFetch'))).toLocaleTimeString()}
+                </span>
+              )}
+              {user?.email && (
+                <button
+                  onClick={handleManualRefresh}
+                  className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-xs transition"
+                  title="Refresh calendar data"
+                >
+                  ↻ Refresh
+                </button>
+              )}
+            </div>
           </div>
-          <div className="rounded-md">
+          <div className="rounded-md h-[calc(100%-3rem)] overflow-auto">
             <Calendar
               googleEvents={googleEvents}
               outlookEvents={outlookEvents}
