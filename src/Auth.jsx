@@ -11,8 +11,8 @@ export default function Auth({ setAccessToken, setUser }) {
           new URLSearchParams({
             code: codeResponse.code,
             client_id: "1039570474106-dmkij0nlkp9m7f5n20jf34q62l34nr14.apps.googleusercontent.com",
-            client_secret: "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",
-            redirect_uri: "http://127.0.0.1:8888",
+            client_secret: process.env.REACT_APP_GOOGLE_CLIENT_SECRET || "",
+            redirect_uri: "http://localhost:8888",
             grant_type: "authorization_code",
           }),
           {
@@ -37,6 +37,9 @@ export default function Auth({ setAccessToken, setUser }) {
         localStorage.setItem("user", JSON.stringify(userInfo.data));
       } catch (error) {
         console.error("Token exchange or user fetch failed:", error.response?.data || error.message);
+        if (error.response?.status === 400) {
+          console.error("This might be due to missing client secret. Please check your .env file.");
+        }
       }
     },
     onError: (err) => console.error("Google Login Failed", err),

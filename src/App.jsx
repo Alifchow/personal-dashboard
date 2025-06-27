@@ -36,8 +36,14 @@ export function App() {
   const [outlookEvents, setOutlookEvents] = useState([]);
   const [outlookError, setOutlookError] = useState(null);
   const [weekStart, setWeekStart] = useState(() => {
-    const d = new Date("2025-04-27T00:00:00Z");
-    return d;
+    const now = new Date();
+    const currentDay = now.getDay(); // 0 = Sunday, 1 = Monday, etc.
+    const daysFromMonday = currentDay === 0 ? 6 : currentDay - 1; // Adjust for Monday start
+    
+    const weekStart = new Date(now);
+    weekStart.setDate(now.getDate() - daysFromMonday);
+    weekStart.setHours(0, 0, 0, 0);
+    return weekStart;
   });
 
   // Check for Spotify code in URL search params on mount
@@ -88,8 +94,23 @@ export function App() {
     if (accessToken) {
       const fetchEvents = async () => {
         try {
-          const start = new Date("2025-04-27T00:00:00Z").toISOString();
-          const end = new Date("2025-05-03T23:59:59Z").toISOString();
+          // Calculate current week's start and end dates
+          const now = new Date();
+          const currentDay = now.getDay(); // 0 = Sunday, 1 = Monday, etc.
+          const daysFromMonday = currentDay === 0 ? 6 : currentDay - 1; // Adjust for Monday start
+          
+          const weekStart = new Date(now);
+          weekStart.setDate(now.getDate() - daysFromMonday);
+          weekStart.setHours(0, 0, 0, 0);
+          
+          const weekEnd = new Date(weekStart);
+          weekEnd.setDate(weekStart.getDate() + 6);
+          weekEnd.setHours(23, 59, 59, 999);
+          
+          const start = weekStart.toISOString();
+          const end = weekEnd.toISOString();
+
+          console.log("Fetching events for week:", { start, end });
 
           const calendarIds = [
             "primary",
